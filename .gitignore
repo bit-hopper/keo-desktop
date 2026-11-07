@@ -1,0 +1,12 @@
+node_modules/
+# build output of the native probe and of any packaged app
+target/
+Cargo.lock.bak
+dist/
+out/
+*.log
+# throwaway comparison probes: kept on this machine only, never shipped
+probes/
+# private working notes and instructions for the assistant: every markdown file except the README
+*.md
+!README.md

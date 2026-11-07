@@ -1,0 +1,15 @@
+{
+  "name": "keo-desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "keo for the desktop: the keo runtime in its own window, no backend. Prototype.",
+  "license": "MIT",
+  "main": "main.js",
+  "scripts": {
+    "start": "node scripts/run-electron.js .",
+    "test:serve": "node test/serve-test.js"
+  },
+  "devDependencies": {
+    "electron": "45.2.3"
+  }
+}
