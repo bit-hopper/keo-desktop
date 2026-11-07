@@ -45,6 +45,12 @@ node scripts/run-electron.js scripts/smoke.js --package <folder> --work <scratch
 
 The second one opens the app on a built package with a virtual authenticator and checks: the address, the sandbox of the world, the policy headers and the refusals, an identity made and signed in again for `keo.test`, storage kept across a reload, the window staying put, and that no request leaves the app. A virtual authenticator shows none of the focus or prompt-timing problems a real one can, so this says nothing about a real one.
 
+```
+node scripts/run-electron.js scripts/real.js --package <folder> --work <scratch folder>
+```
+
+That one uses a real authenticator and needs a person at the keyboard: four OS prompts (make the passkey, sign the identity, sign in, sign in again after a reload), each announced before it appears. It reports whether the window had focus at the start of each, and writes `real-desktop.json` to the scratch folder. The passkey it makes stays in the authenticator; delete "Real desktop test" for `keo.test` in the OS passkey settings afterwards.
+
 ## Licence
 
 MIT.
