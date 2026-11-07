@@ -7,9 +7,11 @@
   "main": "app.js",
   "scripts": {
     "start": "node scripts/run-electron.js .",
-    "test:serve": "node test/serve-test.js"
+    "test:serve": "node test/serve-test.js",
+    "pack": "node scripts/pack.js"
   },
   "devDependencies": {
+    "@electron/packager": "20.3.0",
     "electron": "45.2.3"
   }
 }

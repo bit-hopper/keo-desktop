@@ -2,7 +2,7 @@
 
 keo for the desktop: the keo runtime in a window of its own, with no backend. Identity, keys and worlds live on the device.
 
-Status: prototype. It opens a built keo package in a window, and the identity, world and storage work against a virtual authenticator. It has not been run with a real authenticator, has no installer and cannot update itself yet.
+Status: prototype. It opens a built keo package in a window; the identity, world and storage were run against a virtual authenticator and, for create, sign-in and linking, against a real one. It can be packed as a folder (and a zip) to unzip and run, and it applies a signed release you already have from its menu. It is not signed, has no installer, and does not fetch updates from anywhere.
 
 ## How it fits together
 
@@ -16,7 +16,7 @@ node extension/build.js <folder> --desktop        # in the keo repo
 
 The app answers `https://keo.test` itself, from the package, with no socket, certificate or DNS (the name is reserved and never resolves). That kind of address is one a passkey can be made on without a server. The address is the passkey's rpId, so it is fixed in `main.js` and a package cannot change it: identities made here belong to it for good.
 
-Because the app serves the package, replacing the package folder is how the app will be updated without a reinstall. That is not built; the signed-release checks it will use are in the keo repo.
+Because the app serves the package, replacing the package folder is how the app is updated without a reinstall: see "Releases" below.
 
 What the host does, and what it refuses:
 
@@ -36,6 +36,33 @@ node scripts/run-electron.js . --package <folder>       # --devtools opens the d
 
 `scripts/run-electron.js` starts the app with `ELECTRON_RUN_AS_NODE` removed from the child's environment: some terminals export it, and with it set the binary behaves as plain node. `app.js` is the entry and `main.js` only exports what it uses; they are two files because `require.main === module` is false for the entry module in this runtime, so a check of that kind never starts the app. The app keeps its storage under the user's application-data folder in `keo` (`KEO_USER_DATA` overrides it); a second instance hands over to the first.
 
+## Packing
+
+```
+node scripts/pack.js --package <built desktop package> --out <new folder> [--update-key <file>] [--bundled-version <n>] [--zip]
+```
+
+Makes `<out>/app/keo-<system>-<arch>/` (run `keo` in it) and, with `--zip`, `<out>/keo-<system>-<arch>.zip`. The folder holds the desktop runtime, the host (`app.js`, `main.js`, `lib/`, without the tests or probes) in an archive, and the package it serves as `resources/keo-package`. It is made for the system it runs on. The runtime comes from the packager's download cache at the version pinned in `package.json`.
+
+It is not signed: no code-signing certificate exists yet, so the system warns on the first run. **An installer is needed before anything is deployed** (it needs that certificate); the zipped folder is for trying the app and for handing it to people who know why it warns.
+
+The update key is the public half of the key releases are signed with (`update-key.json`, from `node extension/sign-release.js keygen` in the keo repo, made offline). `--update-key` names it; without that option the one inside the package is used, and a build with neither takes no updates and says so. The app keeps its own copy of the key and of the code that checks signatures (`verify/` in its archive); it never uses the ones in a package or a release, because a package must not be the only thing vouching for its own verifier.
+
+## Releases
+
+A release folder holds `release.json` (the signed list the keo repo's `sign-release.js` writes) and `package/` (the built desktop package it describes, every file):
+
+```
+node extension/build.js <out>/package --desktop            # in the keo repo
+node extension/sign-release.js sign <out>/package --key <key file> --version <n> --name <label> --out <out>/release.json
+```
+
+In the app, press the menu key (Alt) and choose **keo > Apply a release ...**, then pick the folder. The app checks the signature against its own key, that the release is newer than the one running (the package that came with the app counts as release 0 unless it was packed with `--bundled-version`), and then that the folder holds exactly the files the signed list names with the sizes and hashes it gives; each file is checked as it is copied, so what was checked is what is kept. Nothing runs from the release folder. If any check fails, nothing is kept and the reason is shown. When it passes the app asks once, copies the package into its data folder (`releases/`), and restarts on it. **keo > Go back to the previous version** returns to the release before (or to the package that came with the app) and removes the one it leaves; the two most recent releases are kept at most. Identities and data are not touched by either: they belong to the address (`keo.test`), not to the package.
+
+If the release in use is later found damaged or missing a file, the app starts on the one before, or on the package it came with, and says so. A package named on the command line (`--package`) always wins and turns the menu entries off, since a release applied then would not be the one that starts next time.
+
+Not built yet: fetching a release from an address (the plan is the project's repository releases page), a zip as the release (a folder is what is read), and updating the host itself (the code in `app.js`, `main.js` and `lib/` and the desktop runtime change only with a new pack).
+
 ## Tests
 
 ```
@@ -45,6 +72,14 @@ node scripts/run-electron.js scripts/smoke.js --package <folder> --work <scratch
 ```
 
 The smoke script opens the app on a built package with a virtual authenticator and checks: the address, the sandbox of the world, the policy headers and the refusals, an identity made and signed in again for `keo.test`, storage kept across a reload, the window staying put, and that no request leaves the app. A virtual authenticator shows none of the focus or prompt-timing problems a real one can, so this says nothing about a real one.
+
+```
+node test/update-test.js <built desktop package> <scratch folder>         # no window: reading, staging, refusing and going back, and the questions put to the person (answered from the test), 62 checks
+node test/update-entry-test.js <built desktop package> <scratch folder>   # the app started by its entry: which package the window serves after a release, going back, a damaged release, a package named on the command line, 11 checks
+node test/packed-test.js <built desktop package> <scratch folder>         # packs the app and starts the packed executable: the package inside, the key inside, a release applied and undone, 12 checks (about two minutes)
+```
+
+The update tests make their own signing key and small made-up packages (the built package is used for its verifier code and, in the second test, as the package that is served); no real key is involved. The menu itself and the native folder and question boxes are not driven: the same functions are called with the questions answered from the test, so how they look and read is for a person to see.
 
 ```
 node scripts/run-electron.js scripts/permissions.js --package <folder> --work <scratch folder>   # fake camera and microphone: who gets them, what is refused, that copying works

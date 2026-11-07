@@ -4,7 +4,7 @@
 //
 // The app is a small fixed host and a package folder it serves. The package is the folder `node extension/build.js <dir> --desktop`
 // makes in the keo repo, so shell, world and runtime come from there and nothing of keo is kept in this repo. Replacing the package
-// folder is how the app is updated without a reinstall (not built yet; see README).
+// folder is how the app is updated without a reinstall (lib/update.js stages a signed release; app.js chooses which package to run).
 //
 // This file only exports start(); app.js is the entry that runs it (see there for why they are two files).
 //   node scripts/run-electron.js . --package <folder>      run it (the script clears ELECTRON_RUN_AS_NODE, which some terminals export)
@@ -28,7 +28,8 @@ function parseArgs(argv) {
   return o;
 }
 
-// Opens the window on the package. `opts`: { packageDir, devtools, userData }. Resolves to { win, root, policy }.
+// Opens the window on the package. `opts`: { packageDir, devtools, menuTemplate }. Resolves to { win, root, policy }.
+// `menuTemplate(getWin)` returns the app menu (the update entries, see lib/update-ui.js); without it there is no menu.
 async function start(opts) {
   if (!opts.packageDir) throw new Error('No package given. Build one with `node extension/build.js <folder> --desktop` in the keo repo, then pass --package <folder>.');
   const root = path.resolve(opts.packageDir);
@@ -70,7 +71,7 @@ async function start(opts) {
     width: 1280, height: 860, title: 'keo', backgroundColor: '#ffffff', autoHideMenuBar: true,
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false }
   });
-  if (!opts.devtools) Menu.setApplicationMenu(null);
+  if (!opts.devtools) Menu.setApplicationMenu(opts.menuTemplate ? Menu.buildFromTemplate(opts.menuTemplate(() => win)) : null);
   const wc = win.webContents;
   // The window stays on the app's own address. A link out opens nothing (a world can ask for a pop-up; the app does not follow it).
   wc.on('will-navigate', (e, url) => { if (!fromApp(url)) e.preventDefault(); });
