@@ -23,7 +23,7 @@ What the host does, and what it refuses:
 - serves only files of the package, by a path check that refuses `..`, hidden names, backslashes and anything that does not decode;
 - GET and HEAD only; the shell pages run under a policy that allows scripts from the package only, and `world.html` runs sandboxed (an opaque origin) under its own;
 - keeps the window on its own address, opens no pop-ups, and asks "Leave keo?" itself when a page has unsaved changes;
-- allows camera and microphone for the app's address and no other permission;
+- allows two permissions, to the app's own page and to no frame inside it: the camera and microphone (calls are the page's), and writing a copied code to the clipboard. Reading the clipboard, location, notifications and the rest are refused, and the sandboxed world page gets neither;
 - passes any other address on to the network untouched, except that the one catalogue site the package names may answer the shell page across origins.
 
 ## Running
@@ -45,6 +45,13 @@ node scripts/run-electron.js scripts/smoke.js --package <folder> --work <scratch
 ```
 
 The smoke script opens the app on a built package with a virtual authenticator and checks: the address, the sandbox of the world, the policy headers and the refusals, an identity made and signed in again for `keo.test`, storage kept across a reload, the window staying put, and that no request leaves the app. A virtual authenticator shows none of the focus or prompt-timing problems a real one can, so this says nothing about a real one.
+
+```
+node scripts/run-electron.js scripts/permissions.js --package <folder> --work <scratch folder>   # fake camera and microphone: who gets them, what is refused, that copying works
+node scripts/run-electron.js scripts/dialogs.js --package <folder> --work <scratch folder>       # the link dialog's Copy and Save as file by real clicks, and the "Leave keo?" question
+```
+
+The permissions script can also be pointed at the machine's own camera and microphone with `--real-devices` (the camera light comes on for a moment; it reports the devices and whether a stream opened, and checks nothing else). The dialogs script sets the save path and stubs the leave answer from the test, so it shows that the data reaches a file with the right name and content, that the clipboard holds the copied code, and that Leave and Stay are obeyed; how the native Save box and the leave box look and read is for a person to see.
 
 ```
 node scripts/run-electron.js scripts/real.js --package <folder> --work <scratch folder>

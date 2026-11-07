@@ -57,11 +57,14 @@ async function start(opts) {
     return new Response(req.method === 'HEAD' ? null : data, { status: 200, headers: headersFor(hit.rel, policy) });
   });
 
-  // Camera and microphone for calls, for the app's own address only; every other permission is refused.
+  // Two permissions, for the app's own page and for no frame inside it: the camera and microphone (calls are the shell's, drawn and run by
+  // the page itself) and writing a copied code to the clipboard (a click in a dialog). Reading the clipboard, location, notifications and the
+  // rest are refused. The sandboxed world page is a frame, so it gets neither, whatever the browser would decide for it.
+  const GRANTED = { media: true, 'clipboard-sanitized-write': true };
   const ses = session.defaultSession;
   const fromApp = (url) => { try { return new URL(url).origin === ORIGIN; } catch (e) { return false; } };
-  ses.setPermissionRequestHandler((wc, permission, cb, details) => cb(permission === 'media' && fromApp(details.requestingUrl)));
-  ses.setPermissionCheckHandler((wc, permission, origin) => permission === 'media' && fromApp(origin));
+  ses.setPermissionRequestHandler((wc, permission, cb, details) => cb(!!GRANTED[permission] && details.isMainFrame === true && fromApp(details.requestingUrl)));
+  ses.setPermissionCheckHandler((wc, permission, origin, details) => !!GRANTED[permission] && details.isMainFrame === true && fromApp(origin));
 
   const win = new BrowserWindow({
     width: 1280, height: 860, title: 'keo', backgroundColor: '#ffffff', autoHideMenuBar: true,
