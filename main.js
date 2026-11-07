@@ -6,11 +6,12 @@
 // makes in the keo repo, so shell, world and runtime come from there and nothing of keo is kept in this repo. Replacing the package
 // folder is how the app is updated without a reinstall (not built yet; see README).
 //
+// This file only exports start(); app.js is the entry that runs it (see there for why they are two files).
 //   node scripts/run-electron.js . --package <folder>      run it (the script clears ELECTRON_RUN_AS_NODE, which some terminals export)
 //   --devtools    open the developer tools in a window of their own
 //
 // The page has no access to node or to this process: the window is sandboxed, with context isolation, and there is no preload script.
-const { app, BrowserWindow, protocol, session, net, dialog, Menu } = require('electron');
+const { BrowserWindow, protocol, session, net, dialog, Menu } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { resolveInside, readPolicy, headersFor } = require('./lib/serve.js');
@@ -83,15 +84,3 @@ async function start(opts) {
 }
 
 module.exports = { start, parseArgs, HOST, ORIGIN };
-
-if (require.main === module) {
-  // Two instances on one profile would write to the same storage; the second one hands over to the first and quits.
-  if (!app.requestSingleInstanceLock()) app.quit();
-  else {
-    app.setPath('userData', process.env.KEO_USER_DATA || path.join(app.getPath('appData'), 'keo'));
-    app.on('window-all-closed', () => app.quit());
-    app.whenReady().then(() => start(parseArgs(process.argv.slice(1)))).then(({ win }) => {
-      app.on('second-instance', () => { if (win.isMinimized()) win.restore(); win.focus(); });
-    }).catch((e) => { dialog.showErrorBox('keo could not start', String(e && e.message || e)); app.exit(1); });
-  }
-}

@@ -34,16 +34,17 @@ node node_modules/electron/install.js                   # npm does not always fe
 node scripts/run-electron.js . --package <folder>       # --devtools opens the developer tools
 ```
 
-`scripts/run-electron.js` starts the app with `ELECTRON_RUN_AS_NODE` removed from the child's environment: some terminals export it, and with it set the binary behaves as plain node. The app keeps its storage under the user's application-data folder in `keo` (`KEO_USER_DATA` overrides it); a second instance hands over to the first.
+`scripts/run-electron.js` starts the app with `ELECTRON_RUN_AS_NODE` removed from the child's environment: some terminals export it, and with it set the binary behaves as plain node. `app.js` is the entry and `main.js` only exports what it uses; they are two files because `require.main === module` is false for the entry module in this runtime, so a check of that kind never starts the app. The app keeps its storage under the user's application-data folder in `keo` (`KEO_USER_DATA` overrides it); a second instance hands over to the first.
 
 ## Tests
 
 ```
 npm run test:serve                                       # no window: the serving rules, 37 checks
+node test/entry-test.js <folder> <scratch folder>        # starts the app by its own entry (app.js), as a person does: a window on keo.test, a second start hands over, a bad package is refused with a reason
 node scripts/run-electron.js scripts/smoke.js --package <folder> --work <scratch folder>
 ```
 
-The second one opens the app on a built package with a virtual authenticator and checks: the address, the sandbox of the world, the policy headers and the refusals, an identity made and signed in again for `keo.test`, storage kept across a reload, the window staying put, and that no request leaves the app. A virtual authenticator shows none of the focus or prompt-timing problems a real one can, so this says nothing about a real one.
+The smoke script opens the app on a built package with a virtual authenticator and checks: the address, the sandbox of the world, the policy headers and the refusals, an identity made and signed in again for `keo.test`, storage kept across a reload, the window staying put, and that no request leaves the app. A virtual authenticator shows none of the focus or prompt-timing problems a real one can, so this says nothing about a real one.
 
 ```
 node scripts/run-electron.js scripts/real.js --package <folder> --work <scratch folder>
