@@ -89,7 +89,7 @@ node scripts/run-electron.js scripts/dialogs.js --package <folder> --work <scrat
 
 ```
 node test/lan-test.js                                                                         # the network part alone, in plain node, on this machine's real interfaces: two instances find each other and pass a request, bad sockets are cut, 22 checks
-node scripts/lan.js --package <folder> --work <scratch folder> --playwright <keo repo folder> # TWO apps on one machine, virtual authenticators: found only when a friend, declined when not added, dialed by key both ways, a repeated request refused, the sandboxed world locked out, and the kernel Friends window driven by real clicks, 38 checks
+node scripts/lan.js --package <folder> --work <scratch folder> --playwright <keo repo folder> # TWO apps on one machine, virtual authenticators: found only when a friend, declined when not added, dialed by key both ways, a repeated request refused, the sandboxed world locked out, and the kernel Friends window driven by real clicks (--shots <folder> saves pictures of it), 39 checks
 ```
 
 `scripts/lan.js` adds friends with the contact book's own function, not through the dialog where two people compare eight words (that dialog is tested in the keo repo). Two apps on one machine share one network: it cannot show a packet crossing a real link, a router that isolates its clients, or a firewall that blocks the app. Known flake, cause not found: `test/update-entry-test.js` fails in some runs (the app as committed before the network work failed 5 of 8) on which page the debugging port lists.
