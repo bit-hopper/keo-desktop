@@ -91,6 +91,30 @@ const poll = async (fn, ms) => { for (let t = 0; t < (ms || 8000); t += 100) { c
     check('and none of the malformed ones is', !B.peers().some((p) => /Low|High|bad|OtherVersion|^x|^y/.test(p.payload)), B.peers());
     raw.close();
 
+    // ---- each way of announcing works on its own (a network may drop one of them)
+    const bc = os.networkInterfaces();
+    const sub = [].concat(...Object.values(bc).map((l) => l || [])).filter((x) => x.family === 'IPv4' && !x.internal && privateV4(x.address, false) && x.address === addr)[0];
+    const ipp = sub.address.split('.').map(Number), mm = sub.netmask.split('.').map(Number), bcastAddr = ipp.map((n, i) => (n | (~mm[i] & 255))).join('.');
+    const onlyB = createLan({ intervalMs: 400, mechanisms: ['broadcast'], onRequest: async () => null }), onlyM = createLan({ intervalMs: 400, mechanisms: ['multicast'], onRequest: async () => null });
+    const listener = createLan({ intervalMs: 400, onRequest: async () => null });
+    try {
+      await listener.start({ payload: null });
+      await onlyB.start({ payload: 'tagBroadcastOnly' }); await onlyM.start({ payload: 'tagMulticastOnly' });
+      const fb = await poll(() => listener.peers().find((p) => p.payload === 'tagBroadcastOnly'));
+      const fm = await poll(() => listener.peers().find((p) => p.payload === 'tagMulticastOnly'));
+      check('an announcement sent only by subnet broadcast (' + bcastAddr + ') is heard', !!fb && fb.port === onlyB.tcpPort(), fb);
+      check('and one sent only by multicast is heard', !!fm && fm.port === onlyM.tcpPort(), fm);
+      const rawb = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+      rawb.bind(0, '0.0.0.0'); await new Promise((r) => rawb.once('listening', r)); rawb.setBroadcast(true);
+      await new Promise((r) => rawb.send(Buffer.from('KEOLAN1 5003 tagRawBroadcast', 'latin1'), PORT, bcastAddr, () => r()));
+      const fr = await poll(() => listener.peers().find((p) => p.payload === 'tagRawBroadcast'));
+      check('a well-formed datagram from another sender sent to the broadcast address is listed', !!fr && fr.port === 5003, fr);
+      await new Promise((r) => rawb.send(Buffer.from('KEOLAN1 80 tagBroadcastLowPort', 'latin1'), PORT, bcastAddr, () => r()));
+      await sleep(600);
+      check('and a malformed one by broadcast is not', !listener.peers().some((p) => /LowPort/.test(p.payload)), listener.peers());
+      rawb.close();
+    } finally { onlyB.close(); onlyM.close(); listener.close(); }
+
     // ---- stopping
     A.stop();
     const gone = await net.connect({ host: addr, port }).on('error', () => {}) && await new Promise((res) => { const s = net.connect({ host: addr, port }); s.on('connect', () => { s.destroy(); res('connected'); }); s.on('error', () => res('refused')); });
