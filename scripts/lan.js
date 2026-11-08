@@ -2,7 +2,7 @@
 // network and connecting by key (the friend's DID), with no code passed by anyone. Plain node: it starts both apps and drives them over their
 // debugging ports (playwright-core is taken from the keo repo's node_modules).
 //
-//   node scripts/lan.js --package <desktop package> --work <scratch folder> --playwright <keo repo folder>
+//   node scripts/lan.js --package <desktop package> --work <scratch folder> --playwright <keo repo folder> [--shots <folder>]
 //
 // The apps use the machine's own network interface and multicast (so a machine with no private network address cannot run this), and every
 // address except the apps' own is made unreachable. Friends are added with the contact book's own function, NOT through the dialog where
@@ -16,6 +16,7 @@ const path = require('path');
 
 const arg = (n) => { const i = process.argv.indexOf(n); return i > 0 ? process.argv[i + 1] : null; };
 const PKG = arg('--package'), WORK = arg('--work'), PW = arg('--playwright');
+const SHOTS = arg('--shots');            // a folder: pictures of the Friends window in four states, for a person to look at
 if (!PKG || !WORK || !PW) { console.error('usage: scripts/lan.js --package <desktop package> --work <scratch folder> --playwright <keo repo folder>'); process.exit(2); }
 const { chromium } = require(path.join(path.resolve(PW), 'node_modules', 'playwright-core'));
 const exe = require('electron');
@@ -26,6 +27,7 @@ function check(name, ok, detail) { if (ok) passed++; else failed++; console.log(
 const poll = async (fn, ms) => { const t0 = Date.now(); while (Date.now() - t0 < (ms || 30000)) { try { const v = await fn(); if (v) return v; } catch (e) {} await sleep(300); } return null; };
 const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); s.on('error', rej); });
 const children = [];
+const shot = async (P, name) => { if (!SHOTS) return; fs.mkdirSync(path.resolve(SHOTS), { recursive: true }); await sleep(600); fs.writeFileSync(path.join(path.resolve(SHOTS), name + '.png'), await P.page.screenshot()); };
 
 async function launch(tag) {
   const ud = path.join(path.resolve(WORK), 'ud-' + tag);
@@ -105,21 +107,25 @@ const closeAll = async (A, B) => { for (const P of [A, B]) await ev(P, () => win
     const wfA = await worldFrame(A);
     check('Alice\'s world is up and sandboxed, so the screen below is the real one', !!wfA);
     await wfA.evaluate(() => new Promise((res) => lively.require('lively.identity.FriendsDialog').toRun(() => { lively.BuildSpec('lively.identity.FriendsDialog').createMorph().openInWorldCenter(); res(true); })));
+    await wfA.evaluate(() => { const w = $world.get('IdentityFriendsDialog'); window.__fd = []; const oc = w.onLanConnect; w.onLanConnect = function (did) { window.__fd.push({ t: Date.now(), what: 'onLanConnect', stack: String(new Error().stack).split(String.fromCharCode(10)).slice(1, 7).join(' | ').slice(0, 500) }); return oc.apply(this, arguments); }; const os = w.setStatus; w.setStatus = function (m, e) { window.__fd.push({ t: Date.now(), what: 'setStatus', m: String(m).slice(0, 70), e: !!e }); return os.apply(this, arguments); }; });   // records what the window was asked to do, for the check that it dialed only once
     const uiRect = (name) => wfA.evaluate((n) => { const w = $world.get('IdentityFriendsDialog'); const m = w && w.get(n); if (!m) return null; const r = m.renderContext().shapeNode.getBoundingClientRect(); return r.width ? { x: r.x, y: r.y, w: r.width, h: r.height } : null; }, name);
     const uiText = (name) => wfA.evaluate((n) => { const w = $world.get('IdentityFriendsDialog'); const m = w && w.get(n); return m ? String(typeof m.getTextString === 'function' ? m.getTextString() : m.textString) : null; }, name);
     const uiClick = async (name) => { const r = await uiRect(name); const box = await (await A.page.$('#world')).boundingBox(); await A.page.mouse.click(box.x + r.x + r.w / 2, box.y + r.y + r.h / 2); };
     const connectBtn = await poll(() => uiRect('lanConnectBtn'), 30000);
     const rowText = await uiText('friendDid');
-    check('the Friends window shows Bob as on this network, with a Connect button', !!connectBtn && /on this network, not connected/.test(rowText || ''), { connectBtn, rowText });
+    check('the Friends window shows Bob as on this network, with a Connect button', !!connectBtn && /on this network/.test(rowText || '') && !/not connected/.test(rowText || ''), { connectBtn, rowText });
     check('and says this webputer is visible to friends on the network', /is visible/.test((await uiText('lanVisibleText')) || ''), await uiText('lanVisibleText'));
+    await shot(A, '1-friend-found');
     await uiClick('lanConnectBtn');
     const upUi = await readyBoth(A, B);
     check('a real click on Connect connects the two, with no code passed', !!upUi && upUi.a.peer === B.did && upUi.b.peer === A.did, upUi);
     const settled = await poll(async () => /connected now, friends/.test((await uiText('friendDid')) || '') && !(await uiRect('lanConnectBtn')), 20000);
     check('the row then says connected now, friends, and the Connect button is gone', !!settled, { row: await uiText('friendDid'), button: await uiRect('lanConnectBtn') });
+    await shot(A, '2-connected');
     check('and the sentence that said the connection was being made is gone', (await uiText('statusText')) === '', await uiText('statusText'));
     await uiClick('lanVisibleBtn');
     check('a real click on Hide turns visibility off: the shell says so and so does the line', !!(await poll(async () => (await status(A)).visible === false && /hidden/.test((await uiText('lanVisibleText')) || ''), 15000)), { shell: (await status(A)).visible, line: await uiText('lanVisibleText') });
+    await shot(A, '3-this-webputer-hidden');
     await uiClick('lanVisibleBtn');
     check('and a click on Show turns it on again', !!(await poll(async () => (await status(A)).visible === true && /is visible/.test((await uiText('lanVisibleText')) || ''), 15000)), { shell: (await status(A)).visible, line: await uiText('lanVisibleText') });
     await closeAll(A, B);
@@ -185,6 +191,9 @@ const closeAll = async (A, B) => { for (const P of [A, B]) await ev(P, () => win
     const nf = await dial(A, B.did);
     check('and a dial to Bob says he was not found on this network', /not found on this network/.test(nf.err || ''), nf);
     check('the Friends window then says none of the friends was found, with no Connect button', !!(await poll(async () => /None of your friends was found/.test((await uiText('lanHint')) || '') && !(await uiRect('lanConnectBtn')), 20000)), { hint: await uiText('lanHint'), button: await uiRect('lanConnectBtn') });
+    await shot(A, '4-friend-hidden-hint');
+    const fd = await wfA.evaluate(() => window.__fd);
+    check('the Friends window dialed exactly once, for the one real click, and never showed an error', fd.filter((x) => x.what === 'onLanConnect').length === 1 && !fd.some((x) => x.what === 'setStatus' && x.e), fd);
     await ev(B, () => window.keoLan.setVisible({ on: true }));
     check('Bob turns it on again and Alice finds him', !!(await foundHas(A, B.did)), await status(A));
     check('and the Friends window offers Connect again, with the hint gone', !!(await poll(async () => !!(await uiRect('lanConnectBtn')) && !(await uiRect('lanHint')), 20000)), { button: await uiRect('lanConnectBtn'), hint: await uiRect('lanHint') });
