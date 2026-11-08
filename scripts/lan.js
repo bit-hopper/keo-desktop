@@ -2,7 +2,17 @@
 // network and connecting by key (the friend's DID), with no code passed by anyone. Plain node: it starts both apps and drives them over their
 // debugging ports (playwright-core is taken from the keo repo's node_modules).
 //
-//   node scripts/lan.js --package <desktop package> --work <scratch folder> --playwright <keo repo folder> [--shots <folder>]
+//   node scripts/lan.js --package <desktop package> --work <scratch folder> --playwright <keo repo folder> [--shots <folder>] [--remote-b <address>] [--call audio|video] [--fake-media]
+//
+//   --remote-b  the second app is NOT started here: it is already running on another machine, started there with a debugging port that this
+//               machine can reach (a tunnel to it, for instance), e.g. http://127.0.0.1:9333. It is only attached to and detached from, never stopped.
+//               The run then also checks that the two really are on different machines: their platforms differ, and the address the first app
+//               hears the second announce from is none of this machine's own.
+//   --fake-media  the apps started HERE use the runtime's fake camera and microphone (a moving picture and a tone), so two apps on one machine do not
+//               fight over the camera or feed back through the speakers. An app on another machine is started there with its own flags.
+//   --call      after the dial, a call over the connection, answered by real clicks on the call panel, with the media measured in both
+//               directions (audio: packets received; video: frames decoded) and the network path the connection took. video turns the camera on.
+//
 //
 // The apps use the machine's own network interface and multicast (so a machine with no private network address cannot run this), and every
 // address except the apps' own is made unreachable. Friends are added with the contact book's own function, NOT through the dialog where
@@ -16,6 +26,8 @@ const path = require('path');
 
 const arg = (n) => { const i = process.argv.indexOf(n); return i > 0 ? process.argv[i + 1] : null; };
 const PKG = arg('--package'), WORK = arg('--work'), PW = arg('--playwright');
+const REMOTE_B = arg('--remote-b'), CALL = arg('--call'), FAKE = process.argv.includes('--fake-media');
+if (CALL && CALL !== 'audio' && CALL !== 'video') { console.error('--call must be audio or video'); process.exit(2); }
 const SHOTS = arg('--shots');            // a folder: pictures of the Friends window in four states, for a person to look at
 if (!PKG || !WORK || !PW) { console.error('usage: scripts/lan.js --package <desktop package> --work <scratch folder> --playwright <keo repo folder>'); process.exit(2); }
 const { chromium } = require(path.join(path.resolve(PW), 'node_modules', 'playwright-core'));
@@ -27,20 +39,36 @@ function check(name, ok, detail) { if (ok) passed++; else failed++; console.log(
 const poll = async (fn, ms) => { const t0 = Date.now(); while (Date.now() - t0 < (ms || 30000)) { try { const v = await fn(); if (v) return v; } catch (e) {} await sleep(300); } return null; };
 const freePort = () => new Promise((res, rej) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); s.on('error', rej); });
 const children = [];
+// A 320x240 picture that moves, 60 frames, in the plain y4m format the runtime can play as a camera (the same as keo's call test uses).
+function makeY4m(file) {
+  if (fs.existsSync(file)) return;
+  const W = 320, H = 240, frames = [Buffer.from('YUV4MPEG2 W' + W + ' H' + H + ' F30:1 Ip A1:1 C420jpeg' + String.fromCharCode(10))];
+  for (let f = 0; f < 60; f++) {
+    const y = Buffer.alloc(W * H), u = Buffer.alloc(W * H / 4, 128 + (f * 2) % 100), v = Buffer.alloc(W * H / 4, 90 + (f * 3) % 120);
+    for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) y[r * W + c] = ((c + f * 9) & 63) < 32 ? 40 + (r & 127) : 200 - (r & 127);
+    frames.push(Buffer.from('FRAME' + String.fromCharCode(10)), y, u, v);
+  }
+  fs.writeFileSync(file, Buffer.concat(frames));
+}
 const shot = async (P, name) => { if (!SHOTS) return; fs.mkdirSync(path.resolve(SHOTS), { recursive: true }); await sleep(600); fs.writeFileSync(path.join(path.resolve(SHOTS), name + '.png'), await P.page.screenshot()); };
 
-async function launch(tag) {
+async function launch(tag, remote) {
   const ud = path.join(path.resolve(WORK), 'ud-' + tag);
-  fs.rmSync(ud, { recursive: true, force: true }); fs.mkdirSync(ud, { recursive: true });
-  const port = await freePort();
+  let port = 0, endpoint = remote;
+  if (!remote) {
+    fs.rmSync(ud, { recursive: true, force: true }); fs.mkdirSync(ud, { recursive: true });
+    port = await freePort(); endpoint = 'http://127.0.0.1:' + port;
+  }
   const env = Object.assign({}, process.env, { KEO_USER_DATA: ud, KEO_ERRORS_TO_STDERR: '1' }); delete env.ELECTRON_RUN_AS_NODE;
   // 'MAP * ~NOTFOUND' keeps every name but the app's own from resolving; the network under test is addresses, not names
-  const child = spawn(exe, [REPO, '--package', PKG, '--remote-debugging-port=' + port, '--host-resolver-rules=MAP * ~NOTFOUND'], { env, stdio: 'ignore' });
-  const exited = new Promise((r) => child.on('exit', r));
-  children.push({ child, exited });
-  console.log('  app ' + tag + ' started, pid ' + child.pid);
+  if (!remote) {
+    const child = spawn(exe, [REPO, '--package', PKG, '--remote-debugging-port=' + port, '--host-resolver-rules=MAP * ~NOTFOUND'].concat(FAKE ? ['--use-fake-device-for-media-stream', '--use-file-for-fake-video-capture=' + path.join(path.resolve(WORK), 'fake-camera.y4m')] : []), { env, stdio: 'ignore' });
+    const exited = new Promise((r) => child.on('exit', r));
+    children.push({ child, exited });
+    console.log('  app ' + tag + ' started, pid ' + child.pid);
+  } else console.log('  app ' + tag + ' is on another machine, attached at ' + remote);
   let browser = null;
-  for (let i = 0; i < 60 && !browser; i++) { try { browser = await chromium.connectOverCDP('http://127.0.0.1:' + port); } catch (e) { await sleep(500); } }
+  for (let i = 0; i < 60 && !browser; i++) { try { browser = await chromium.connectOverCDP(endpoint); } catch (e) { await sleep(500); } }
   if (!browser) throw new Error('could not attach to app ' + tag);
   let page = null;
   for (let i = 0; i < 100 && !page; i++) { page = browser.contexts()[0].pages().find((p) => /^https:\/\/keo\.test\//.test(p.url())) || null; if (!page) await sleep(500); }
@@ -52,7 +80,7 @@ async function launch(tag) {
   await poll(() => page.evaluate('!!(window.keoIdentity && window.keoLan && window.keoP2p && window.keoContacts)'), 60000);
   const made = await page.evaluate((l) => window.keoIdentity.create({ label: l }).then((r) => ({ did: r.did }), (e) => ({ err: e.name + ': ' + e.message })), tag);
   if (made.err) throw new Error('could not make an identity on ' + tag + ': ' + made.err);
-  return { tag, page, browser, did: made.did, ud };
+  return { tag, page, browser, did: made.did, ud, remote: !!remote };
 }
 const ev = (P, fn, arg) => P.page.evaluate(fn, arg);
 const status = (P) => ev(P, () => window.keoLan.status());
@@ -67,8 +95,18 @@ const closeAll = async (A, B) => { for (const P of [A, B]) await ev(P, () => win
   let A = null, B = null;
   try {
     fs.mkdirSync(path.resolve(WORK), { recursive: true });
-    A = await launch('Alice'); B = await launch('Bob');
+    if (FAKE) makeY4m(path.join(path.resolve(WORK), 'fake-camera.y4m'));
+    A = await launch('Alice'); B = await launch('Bob', REMOTE_B);
     check('two apps are up, each with its own identity', !!A.did && !!B.did && A.did !== B.did, { a: A.did, b: B.did });
+    if (REMOTE_B) {
+      const os = require('os');
+      const mine = [].concat(...Object.values(os.networkInterfaces()).map((l) => l || [])).map((a) => a.address);
+      const pa = await ev(A, () => navigator.userAgent), pb = await ev(B, () => navigator.userAgent);
+      const sys = (u) => /Windows/.test(u) ? 'windows' : /Linux/.test(u) ? 'linux' : /Mac/.test(u) ? 'mac' : 'other';
+      console.log('  first app: ' + sys(pa) + ', second app: ' + sys(pb));
+      check('the second app is on another machine: its platform is not this one\'s', sys(pa) !== sys(pb), { pa, pb });
+      globalThis.__localIps = mine;
+    }
     const sa = await status(A), sb = await status(B);
     check('both say the network is available, are signed in and visible (the default)', sa.available && sb.available && sa.signedIn && sb.signedIn && sa.visible && sb.visible, { sa, sb });
     check('with no friends yet, neither finds anyone (a tag is only recognised for a friend)', sa.found.length === 0 && sb.found.length === 0, { sa, sb });
@@ -76,6 +114,12 @@ const closeAll = async (A, B) => { for (const P of [A, B]) await ev(P, () => win
     // ---- a friend is found, a stranger is not
     check('a dial to someone who is not a friend is refused with a sentence', /not a friend/.test((await dial(A, B.did)).err || ''), await dial(A, B.did));
     await befriend(A, B.did, 'Bob');
+    if (REMOTE_B) {
+      // Bob's first announcement can take a few seconds after his identity exists: wait for it
+      const peerIps = await poll(async () => { const l = await ev(A, () => window.keoLan.hostCall('peers').then((j) => j.peers.map((p) => p.ip))); return l.length ? l : null; }, 40000) || [];
+      console.log('  Bob announced from: ' + JSON.stringify(peerIps) + '   this machine: ' + JSON.stringify(globalThis.__localIps));
+      check('Bob announced himself from an address that is none of this machine\'s own: the packet crossed a real link', peerIps.length > 0 && peerIps.every((ip) => globalThis.__localIps.indexOf(ip) < 0), { peerIps });
+    }
     check('once Alice has added Bob, Alice finds Bob on the network by his key (under his name)', !!(await foundHas(A, B.did)) && (await status(A)).found[0].name === 'Bob', await status(A));
     check('Bob, who has not added Alice, finds nobody', (await status(B)).found.length === 0, await status(B));
 
@@ -101,6 +145,68 @@ const closeAll = async (A, B) => { for (const P of [A, B]) await ev(P, () => win
     const up2 = await readyBoth(A, B);
     check('both ends are connected again', !!up2 && up2.a.peer === B.did && up2.b.peer === A.did, up2);
     await closeAll(A, B);
+
+    // ---- a call over a connection made by dialing (--call), answered by real clicks on the call panel
+    if (CALL) {
+      const wfCallA = await poll(async () => { const el = await A.page.$('#world'); const f = el && await el.contentFrame(); return f && (await f.evaluate('window.origin')) === 'null' && (await f.evaluate('!!(window.$world && window.keo && window.keo.init)')) ? f : null; }, 90000);
+      const dc = await dial(A, B.did);
+      check('Alice dials Bob again for the call', !dc.err, dc);
+      const upC = await readyBoth(A, B);
+      check('and both ends are connected', !!upC, upC);
+      const pnl = (P) => P.page.evaluate(() => { const r = document.getElementById('keo-call'); return r ? { hidden: r.hidden, status: r.querySelector('.status').textContent, acts: Array.from(r.querySelectorAll('button[data-act]')).map((b) => b.dataset.act) } : null; });
+      const waitPanel = (P, pred, ms) => poll(async () => { const p = await pnl(P); return p && pred(p) ? p : null; }, ms || 30000);
+      const stat = (P, id) => P.page.evaluate(async (i) => {
+        const pc = window.keoP2p.handle(i).pc, st = await pc.getStats(), o = { audio: 0, video: 0, frames: 0, energy: 0, rtt: null, local: null, remote: null, net: null };
+        const by = {}; st.forEach((x) => { by[x.id] = x; });
+        st.forEach((x) => {
+          if (x.type === 'inbound-rtp') { if (x.kind === 'audio') { o.audio = x.packetsReceived; o.energy = x.totalAudioEnergy || 0; } if (x.kind === 'video') { o.video = x.packetsReceived; o.frames = x.framesDecoded; } }
+          if (x.type === 'transport' && x.selectedCandidatePairId && by[x.selectedCandidatePairId]) {
+            const pr = by[x.selectedCandidatePairId], l = by[pr.localCandidateId], r = by[pr.remoteCandidateId];
+            o.rtt = pr.currentRoundTripTime; o.local = l && (l.candidateType + '/' + l.protocol); o.remote = r && (r.candidateType + '/' + r.protocol); o.net = l && l.networkType;
+          }
+        });
+        return o;
+      }, id);
+      // records every stop() of a track and every 'ended' of one, with a stack, so a track that ends can be traced to who ended it
+      for (const P of [A, B]) await ev(P, () => { if (window.__stops) return; window.__stops = []; const os = MediaStreamTrack.prototype.stop; MediaStreamTrack.prototype.stop = function () { window.__stops.push({ at: Date.now(), kind: this.kind, st: this.readyState, stack: String(new Error().stack).split(String.fromCharCode(10)).slice(2, 6).map((l) => l.trim().slice(0, 90)).join(' | ') }); return os.call(this); }; });
+      const connA = (await conns(A))[0], connB = (await conns(B))[0];
+      const sentinel = await wfCallA.evaluate((id) => window.keo.call('call.start', { id }, 30000).then(() => 'ok', (e) => 'err: ' + e.message), connA.id);
+      check('Alice asks for a call (the world only asks; a prompt appears in the shell)', sentinel === 'ok', sentinel);
+      const act = CALL === 'video' ? 'go-video' : 'go-audio';
+      await waitPanel(A, (p) => !p.hidden && p.acts.includes(act));
+      await A.page.click('#keo-call button[data-act="' + act + '"]', { timeout: 8000 });
+      const inc = await waitPanel(B, (p) => !p.hidden && /is calling/.test(p.status));
+      check('Bob sees the incoming call, with accept and decline', !!inc && inc.acts.indexOf('accept') >= 0 && inc.acts.indexOf('decline') >= 0, inc);
+      check('the incoming call names the caller by the name saved in the friend list (a dialed connection carries no name)', !!inc && /^Alice is calling/.test(inc.status), inc);
+      await B.page.click('#keo-call button[data-act="accept"]', { timeout: 8000 });   // an audio call has the one accept button; a video call's prompt adds accept-audio
+      const live = await Promise.all([waitPanel(A, (p) => p.acts.join() === (CALL === 'video' ? 'mic,cam,hang' : 'mic,hang'), 40000), waitPanel(B, (p) => p.acts.join() === (CALL === 'video' ? 'mic,cam,hang' : 'mic,hang'), 40000)]);
+      check('both sides reach an active call', !!live[0] && !!live[1], live);
+      await sleep(4000);
+      const s1 = await stat(A, connA.id), s2 = await stat(B, connB.id);
+      console.log('  call media, Alice: ' + JSON.stringify(s1) + '\n  call media, Bob:   ' + JSON.stringify(s2));
+      check('audio flows both ways', s1.audio > 20 && s2.audio > 20, { s1, s2 });
+      if (CALL === 'video') check('video flows both ways: frames decoded on both sides', s1.frames > 10 && s2.frames > 10, { s1, s2 });
+      if (CALL === 'video' && !(s1.frames > 10 && s2.frames > 10)) {
+        // what each side negotiated and sent, so a failure says where the picture stopped
+        const dg = (P, id) => P.page.evaluate(async (i) => {
+          const pc = window.keoP2p.handle(i).pc, st = await pc.getStats();
+          const o = { tx: pc.getTransceivers().map((t) => ({ mid: t.mid, dir: t.direction, cur: t.currentDirection, sendTrack: t.sender.track ? t.sender.track.kind + ':' + t.sender.track.readyState : null, recvTrack: t.receiver.track ? t.receiver.track.kind + ':' + t.receiver.track.readyState + (t.receiver.track.muted ? ':muted' : '') : null })), out: [], inb: [], codecs: [], gum: (window.__gumLog || null) };
+          st.forEach((x) => { if (x.type === 'outbound-rtp') o.out.push({ kind: x.kind, packets: x.packetsSent, frames: x.framesEncoded, limit: x.qualityLimitationReason, active: x.active, enc: x.encoderImplementation }); if (x.type === 'inbound-rtp') o.inb.push({ kind: x.kind, packets: x.packetsReceived, lost: x.packetsLost, frames: x.framesDecoded, dec: x.decoderImplementation }); if (x.type === 'codec') o.codecs.push(x.mimeType); });
+          o.sdpVideo = (pc.remoteDescription && pc.remoteDescription.sdp || '').split(String.fromCharCode(13, 10)).filter((l) => /^m=|^a=(rtpmap|sendrecv|recvonly|sendonly|inactive)/.test(l)).slice(0, 14);
+          return o;
+        }, id);
+        console.log('  DIAG track stops, Alice: ' + JSON.stringify(await ev(A, () => window.__stops.map((x) => Object.assign({}, x, { ago: Date.now() - x.at, at: undefined })))));
+        console.log('  DIAG track stops, Bob:   ' + JSON.stringify(await ev(B, () => window.__stops.map((x) => Object.assign({}, x, { ago: Date.now() - x.at, at: undefined })))));
+        console.log('  DIAG video, Alice: ' + JSON.stringify(await dg(A, connA.id)));
+        console.log('  DIAG video, Bob:   ' + JSON.stringify(await dg(B, connB.id)));
+      }
+      check('the call ran over a direct path (host candidates, no relay)', /host/.test(s1.local || '') && /host/.test(s1.remote || ''), { s1 });
+      await sleep(1000);
+      await A.page.click('#keo-call button[data-act="hang"]', { timeout: 8000 });
+      const gone = await poll(async () => { const a = await pnl(A), b = await pnl(B); return a && b && a.hidden && b.hidden; }, 20000);
+      check('hanging up ends the call on both sides', !!gone, { a: await pnl(A), b: await pnl(B) });
+      await closeAll(A, B);
+    }
 
     // ---- the Friends window (the kernel's screen), by real mouse clicks on the shell page
     const worldFrame = (P) => poll(async () => { const el = await P.page.$('#world'); const f = el && await el.contentFrame(); return f && (await f.evaluate('window.origin')) === 'null' && (await f.evaluate('!!(window.$world && window.keo && window.keo.init)')) ? f : null; }, 90000);
@@ -137,7 +243,8 @@ const closeAll = async (A, B) => { for (const P of [A, B]) await ev(P, () => win
       const kd = window.keoDid, hello = window.keoHello, enc = new TextEncoder();
       const peers = (await call('peers')).peers;
       const out = { peers: peers.length };
-      if (peers.length !== 1) return out;
+      // one announcer: the same request port, however many of this machine's addresses its announcements came from (it announces on each network it is on)
+      if (new Set(peers.map((p) => p.port)).size !== 1) return out;
       const target = window.keoContacts && (await window.keoContacts.list())[0].did;
       const off = await window.keoP2p.offer({ expect: target });
       const proof = await window.keoIdentity.deviceProof();
@@ -209,6 +316,6 @@ const closeAll = async (A, B) => { for (const P of [A, B]) await ev(P, () => win
     for (const c of children) { try { c.child.kill(); } catch (e) {} }          // only the processes started here
     await Promise.all(children.map((c) => Promise.race([c.exited, sleep(8000)])));
   }
-  console.log(passed + ' passed, ' + failed + ' failed   (two apps, one machine, the real local network, virtual authenticators)');
+  console.log(passed + ' passed, ' + failed + ' failed   ' + (REMOTE_B ? '(two apps on two machines, the real local network, virtual authenticators)' : '(two apps, one machine, the real local network, virtual authenticators)'));
   process.exit(failed ? 1 : 0);
 })();
