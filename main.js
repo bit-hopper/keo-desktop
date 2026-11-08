@@ -14,7 +14,9 @@
 const { BrowserWindow, protocol, session, net, dialog, Menu } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { resolveInside, readPolicy, headersFor } = require('./lib/serve.js');
+const { createLan } = require('./lib/lan.js');
 
 const HOST = 'keo.test';          // the address identities are made on: fixed here, never read from a package
 const ORIGIN = 'https://' + HOST;
@@ -38,11 +40,52 @@ async function start(opts) {
   catch (e) { throw new Error('That folder is not a desktop package of keo (' + (e && e.message) + '): ' + root); }
   if (!fs.existsSync(path.join(root, 'start.html'))) throw new Error('The package has no start.html: ' + root);
 
+  // The local network (lib/lan.js), for the app's own page and for nothing else. There is no preload and no channel from a page to this
+  // process, so the page asks by an ordinary request to one reserved path, and this process hands what arrives from the network to the
+  // page by running one call in the page's main frame. The sandboxed world page can send a request to the same address, and nothing in
+  // the request says which frame it came from (the origin and fetch-site headers are not visible here, and the browser does not make a
+  // cross-origin page ask first), so a request is taken only with a secret that this process pushes into the shell page's MAIN frame and
+  // that the page reads once and removes (shell/keo-lan.js). The world is a different, sandboxed frame: it cannot read the shell page's
+  // variables, and no bridge op returns the secret. The page decides what any of it means.
+  const lanToken = crypto.randomBytes(24).toString('base64url');
+  let lan = null;
+  const getLan = () => lan || (lan = createLan({
+    onRequest: async (buf, ip) => {
+      try {
+        const frame = win && !win.isDestroyed() ? win.webContents.mainFrame : null;
+        if (!frame) return null;
+        const r = await frame.executeJavaScript('(window.keoLan && window.keoLan.inbound) ? window.keoLan.inbound(' + JSON.stringify(buf.toString('base64url')) + ', ' + JSON.stringify(ip) + ') : null', true);
+        return typeof r === 'string' && r ? Buffer.from(r, 'base64url') : null;
+      } catch (e) { return null; }
+    }
+  }));
+  const json = (obj, status) => new Response(JSON.stringify(obj), { status: status || 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+  async function lanRoute(req) {
+    if (req.method !== 'POST') return new Response('method not allowed', { status: 405, headers: { allow: 'POST' } });
+    const given = Buffer.from(req.headers.get('x-keo-host') || ''), want = Buffer.from(lanToken);
+    if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return new Response('forbidden', { status: 403 });
+    let b;
+    try { const text = await req.text(); if (text.length > 96 * 1024) return json({ error: 'too large' }, 413); b = JSON.parse(text); } catch (e) { return json({ error: 'bad request' }, 400); }
+    try {
+      if (b.op === 'hello') return json({ ok: true });
+      if (b.op === 'start') return json(await getLan().start({ payload: b.payload == null ? null : b.payload }));
+      if (b.op === 'stop') { if (lan) lan.stop(); return json({ ok: true }); }
+      if (b.op === 'peers') return json({ peers: lan ? lan.peers() : [] });
+      if (b.op === 'request') {
+        if (!lan || typeof b.ip !== 'string' || !Number.isInteger(b.port) || typeof b.body !== 'string') return json({ error: 'bad request' }, 400);
+        const reply = await lan.request(b.ip, b.port, Buffer.from(b.body, 'base64url'));
+        return json({ reply: reply.toString('base64url') });
+      }
+    } catch (e) { return json({ error: String(e && e.message || e).slice(0, 200) }, 200); }
+    return json({ error: 'unknown op' }, 400);
+  }
+
   // One answer for everything at https://keo.test; any other address is passed on to the network untouched, except that a catalogue
   // site the package names may answer this page across origins (the extension has that as a host permission; shell/keo-catalog.js
   // asks for it, and only for that one site).
   protocol.handle('https', async (req) => {
     const u = new URL(req.url);
+    if (u.hostname === HOST && u.port === '' && u.pathname === '/.keo-host/lan') return lanRoute(req);
     if (u.hostname !== HOST) {
       const res = await net.fetch(req, { bypassCustomProtocolHandlers: true });
       if (!policy.catalogHosts.has(u.origin)) return res;
@@ -81,6 +124,12 @@ async function start(opts) {
   wc.on('will-prevent-unload', (e) => {
     const choice = dialog.showMessageBoxSync(win, { type: 'question', buttons: ['Leave', 'Stay'], defaultId: 1, cancelId: 1, message: 'Leave keo?', detail: 'Changes that are not saved may be lost.' });
     if (choice === 0) e.preventDefault();
+  });
+  win.on('closed', () => { if (lan) lan.close(); });
+  // The secret goes to the main frame of the app's own page each time its document is ready (a reload makes a new document), and to no other frame.
+  wc.on('dom-ready', () => {
+    if (!fromApp(wc.mainFrame.url)) return;
+    wc.mainFrame.executeJavaScript('window.__keoHostToken = ' + JSON.stringify(lanToken) + ';', true).catch(() => {});
   });
   await win.loadURL(ORIGIN + '/');
   if (opts.devtools) wc.openDevTools({ mode: 'detach' });

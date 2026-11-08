@@ -24,7 +24,8 @@ What the host does, and what it refuses:
 - GET and HEAD only; the shell pages run under a policy that allows scripts from the package only, and `world.html` runs sandboxed (an opaque origin) under its own;
 - keeps the window on its own address, opens no pop-ups, and asks "Leave keo?" itself when a page has unsaved changes;
 - allows two permissions, to the app's own page and to no frame inside it: the camera and microphone (calls are the page's), and writing a copied code to the clipboard. Reading the clipboard, location, notifications and the rest are refused, and the sandboxed world page gets neither;
-- passes any other address on to the network untouched, except that the one catalogue site the package names may answer the shell page across origins.
+- passes any other address on to the network untouched, except that the one catalogue site the package names may answer the shell page across origins;
+- gives the shell page, and nothing else, a way onto the local network (`lib/lan.js`): it listens for short multicast announcements and announces the signed-in person when they are visible, and it carries one request and its reply over TCP to a device that announced itself. It knows no keys and decides nothing: the page makes and checks every request (keo's `shell/keo-lan.js`). Only private IPv4 addresses are used, sizes and rates are capped, and a request goes only to an address and port announced in the last twenty seconds. The page reaches it by a POST to `/.keo-host/lan` on its own address; because the sandboxed world page can send requests to that address too and the request does not say which frame it came from, the app pushes a random secret into the shell page's main frame (read once, then removed) and answers 403 without it.
 
 ## Running
 
@@ -86,7 +87,16 @@ node scripts/run-electron.js scripts/permissions.js --package <folder> --work <s
 node scripts/run-electron.js scripts/dialogs.js --package <folder> --work <scratch folder>       # the link dialog's Copy and Save as file by real clicks, and the "Leave keo?" question
 ```
 
-The permissions script can also be pointed at the machine's own camera and microphone with `--real-devices` (the camera light comes on for a moment; it reports the devices and whether a stream opened, and checks nothing else). The dialogs script sets the save path and stubs the leave answer from the test, so it shows that the data reaches a file with the right name and content, that the clipboard holds the copied code, and that Leave and Stay are obeyed; how the native Save box and the leave box look and read is for a person to see.
+```
+node test/lan-test.js                                                                         # the network part alone, in plain node, on this machine's real interfaces: two instances find each other and pass a request, bad sockets are cut, 22 checks
+node scripts/lan.js --package <folder> --work <scratch folder> --playwright <keo repo folder> # TWO apps on one machine, virtual authenticators: found only when a friend, declined when not added, dialed by key both ways, a repeated request refused, the sandboxed world locked out, 28 checks
+```
+
+`scripts/lan.js` adds friends with the contact book's own function, not through the dialog where two people compare eight words (that dialog is tested in the keo repo). Two apps on one machine share one network: it cannot show a packet crossing a real link, a router that isolates its clients, or a firewall that blocks the app. Known flake, cause not found: `test/update-entry-test.js` fails in some runs (the app as committed before the network work failed 5 of 8) on which page the debugging port lists.
+
+The permissions script can also be pointed at the machine's own camera and microphone with `--real-devices` (the camera light comes on for a moment; it reports the devices and whether a stream opened, and checks nothing else). Add `--hold <seconds>` to keep the camera and microphone open that long: the picture shows in the window, and the script reports the tracks, the picture size, how many frames arrived and the loudest microphone sample.
+
+Known flake, cause not found: in some runs of the fake-device permissions script the fake camera disappears part-way (the device list has no camera and a new camera request fails with "Requested device not found"), so "and sees the devices" fails. In such a run the check that the world page gets no camera also passes for the wrong reason, because it only requires an error. Repeat a failing run before drawing a conclusion. The dialogs script sets the save path and stubs the leave answer from the test, so it shows that the data reaches a file with the right name and content, that the clipboard holds the copied code, and that Leave and Stay are obeyed; how the native Save box and the leave box look and read is for a person to see.
 
 ```
 node scripts/run-electron.js scripts/real.js --package <folder> --work <scratch folder>
