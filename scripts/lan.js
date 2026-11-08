@@ -100,7 +100,32 @@ const closeAll = async (A, B) => { for (const P of [A, B]) await ev(P, () => win
     check('both ends are connected again', !!up2 && up2.a.peer === B.did && up2.b.peer === A.did, up2);
     await closeAll(A, B);
 
+    // ---- the Friends window (the kernel's screen), by real mouse clicks on the shell page
+    const worldFrame = (P) => poll(async () => { const el = await P.page.$('#world'); const f = el && await el.contentFrame(); return f && (await f.evaluate('window.origin')) === 'null' && (await f.evaluate('!!(window.$world && window.keo && window.keo.init)')) ? f : null; }, 90000);
+    const wfA = await worldFrame(A);
+    check('Alice\'s world is up and sandboxed, so the screen below is the real one', !!wfA);
+    await wfA.evaluate(() => new Promise((res) => lively.require('lively.identity.FriendsDialog').toRun(() => { lively.BuildSpec('lively.identity.FriendsDialog').createMorph().openInWorldCenter(); res(true); })));
+    const uiRect = (name) => wfA.evaluate((n) => { const w = $world.get('IdentityFriendsDialog'); const m = w && w.get(n); if (!m) return null; const r = m.renderContext().shapeNode.getBoundingClientRect(); return r.width ? { x: r.x, y: r.y, w: r.width, h: r.height } : null; }, name);
+    const uiText = (name) => wfA.evaluate((n) => { const w = $world.get('IdentityFriendsDialog'); const m = w && w.get(n); return m ? String(typeof m.getTextString === 'function' ? m.getTextString() : m.textString) : null; }, name);
+    const uiClick = async (name) => { const r = await uiRect(name); const box = await (await A.page.$('#world')).boundingBox(); await A.page.mouse.click(box.x + r.x + r.w / 2, box.y + r.y + r.h / 2); };
+    const connectBtn = await poll(() => uiRect('lanConnectBtn'), 30000);
+    const rowText = await uiText('friendDid');
+    check('the Friends window shows Bob as on this network, with a Connect button', !!connectBtn && /on this network, not connected/.test(rowText || ''), { connectBtn, rowText });
+    check('and says this webputer is visible to friends on the network', /is visible/.test((await uiText('lanVisibleText')) || ''), await uiText('lanVisibleText'));
+    await uiClick('lanConnectBtn');
+    const upUi = await readyBoth(A, B);
+    check('a real click on Connect connects the two, with no code passed', !!upUi && upUi.a.peer === B.did && upUi.b.peer === A.did, upUi);
+    const settled = await poll(async () => /connected now, friends/.test((await uiText('friendDid')) || '') && !(await uiRect('lanConnectBtn')), 20000);
+    check('the row then says connected now, friends, and the Connect button is gone', !!settled, { row: await uiText('friendDid'), button: await uiRect('lanConnectBtn') });
+    check('and the sentence that said the connection was being made is gone', (await uiText('statusText')) === '', await uiText('statusText'));
+    await uiClick('lanVisibleBtn');
+    check('a real click on Hide turns visibility off: the shell says so and so does the line', !!(await poll(async () => (await status(A)).visible === false && /hidden/.test((await uiText('lanVisibleText')) || ''), 15000)), { shell: (await status(A)).visible, line: await uiText('lanVisibleText') });
+    await uiClick('lanVisibleBtn');
+    check('and a click on Show turns it on again', !!(await poll(async () => (await status(A)).visible === true && /is visible/.test((await uiText('lanVisibleText')) || ''), 15000)), { shell: (await status(A)).visible, line: await uiText('lanVisibleText') });
+    await closeAll(A, B);
+
     // ---- a request that is sent twice is answered once
+    await sleep(1800);       // the receiver pauses 1.5 s between requests from one address; the dial just made counts
     const raw = await ev(A, async () => {
       const call = (op, args) => window.keoLan.hostCall(op, args);
       const kd = window.keoDid, hello = window.keoHello, enc = new TextEncoder();
@@ -159,8 +184,10 @@ const closeAll = async (A, B) => { for (const P of [A, B]) await ev(P, () => win
     check('Alice stops finding Bob (his announcement runs out)', !!(await poll(async () => !(await status(A)).found.some((f) => f.did === B.did), 50000)), await status(A));
     const nf = await dial(A, B.did);
     check('and a dial to Bob says he was not found on this network', /not found on this network/.test(nf.err || ''), nf);
+    check('the Friends window then says none of the friends was found, with no Connect button', !!(await poll(async () => /None of your friends was found/.test((await uiText('lanHint')) || '') && !(await uiRect('lanConnectBtn')), 20000)), { hint: await uiText('lanHint'), button: await uiRect('lanConnectBtn') });
     await ev(B, () => window.keoLan.setVisible({ on: true }));
     check('Bob turns it on again and Alice finds him', !!(await foundHas(A, B.did)), await status(A));
+    check('and the Friends window offers Connect again, with the hint gone', !!(await poll(async () => !!(await uiRect('lanConnectBtn')) && !(await uiRect('lanHint')), 20000)), { button: await uiRect('lanConnectBtn'), hint: await uiRect('lanHint') });
     check('the setting is kept with the identity (a setting the world may read)', (await ev(B, () => window.keoWorlds.prefsGet())).lanVisible === true);
 
     // ---- signing out stops announcing
