@@ -5,12 +5,14 @@
 //   node scripts/run-electron.js scripts/permissions.js --package <desktop package> --work <scratch folder>
 //   add  --real-devices  to use the machine's own camera and microphone instead (the camera light comes on for a moment): a person should
 //                        be present; it reports the devices it found and whether a stream opened, and checks nothing about permissions.
+//   add  --hold <seconds>  (with --real-devices) to keep the camera and microphone open that long, show the picture in the window, and report
+//                        the tracks, the picture size, how many frames arrived and the loudest sample the microphone gave.
 const { app } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
 const arg = (n) => { const i = process.argv.indexOf(n); return i > 0 ? process.argv[i + 1] : null; };
-const PKG = arg('--package'), WORK = arg('--work'), REAL = process.argv.includes('--real-devices');
+const PKG = arg('--package'), WORK = arg('--work'), REAL = process.argv.includes('--real-devices'), HOLD = Number(arg('--hold')) || 0;
 if (!PKG || !WORK) { console.error('usage: scripts/permissions.js --package <desktop package> --work <scratch folder> [--real-devices]'); process.exit(2); }
 const userData = path.join(path.resolve(WORK), 'userdata-permissions');
 fs.rmSync(userData, { recursive: true, force: true });
@@ -44,6 +46,20 @@ app.whenReady().then(async () => {
       console.log('devices the shell page sees: ' + JSON.stringify(devs));
       const v = await shell(GUM('{ audio: true, video: { width: { ideal: 640 }, height: { ideal: 480 } } }'));
       console.log('camera and microphone stream: ' + JSON.stringify(v));
+      if (HOLD) {
+        // keep the camera on and show it in the app window, so a person can see the light and the picture; count the frames that really arrive
+        const h = await shell(wrap(`
+          var s = await navigator.mediaDevices.getUserMedia({ audio: true, video: { width: { ideal: 640 }, height: { ideal: 480 } } });
+          var el = document.createElement('video'); el.muted = true; el.autoplay = true; el.playsInline = true; el.srcObject = s;
+          el.style.cssText = 'position:fixed;right:16px;bottom:16px;width:320px;z-index:2147483647;border:3px solid #2f9e5b;background:#000';
+          document.body.appendChild(el); await el.play();
+          var frames = 0; var cb = function () { frames++; el.requestVideoFrameCallback(cb); }; el.requestVideoFrameCallback(cb);
+          var ac = new AudioContext(); var an = ac.createAnalyser(); ac.createMediaStreamSource(s).connect(an); var buf = new Uint8Array(an.fftSize); var peak = 0;
+          var t0 = Date.now(); while (Date.now() - t0 < ${HOLD * 1000}) { await new Promise(function (r) { setTimeout(r, 100); }); an.getByteTimeDomainData(buf); for (var i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128)); }
+          var out = { tracks: s.getTracks().map(function (t) { return { kind: t.kind, label: t.label, state: t.readyState, muted: t.muted }; }), size: el.videoWidth + 'x' + el.videoHeight, frames: frames, secs: ${HOLD}, micPeak: peak };
+          s.getTracks().forEach(function (t) { t.stop(); }); el.remove(); ac.close(); return out;`));
+        console.log('held ' + HOLD + ' s: ' + JSON.stringify(h));
+      }
       const a = await shell(GUM('{ audio: true, video: false }'));
       console.log('microphone only: ' + JSON.stringify(a));
       app.exit(0); return;
