@@ -297,7 +297,7 @@ const closeAll = async (A, B) => { for (const P of [A, B]) await ev(P, () => win
     check('Alice stops finding Bob (his announcement runs out)', !!(await poll(async () => !(await status(A)).found.some((f) => f.did === B.did), 50000)), await status(A));
     const nf = await dial(A, B.did);
     check('and a dial to Bob says he was not found on this network', /not found on this network/.test(nf.err || ''), nf);
-    check('the Friends window then says none of the friends was found, with no Connect button', !!(await poll(async () => /None of your friends was found/.test((await uiText('lanHint')) || '') && !(await uiRect('lanConnectBtn')), 20000)), { hint: await uiText('lanHint'), button: await uiRect('lanConnectBtn') });
+    check('the Friends window then says none of the friends were found, with no Connect button', !!(await poll(async () => /None of your friends were found/.test((await uiText('lanHint')) || '') && !(await uiRect('lanConnectBtn')), 20000)), { hint: await uiText('lanHint'), button: await uiRect('lanConnectBtn') });
     await shot(A, '4-friend-hidden-hint');
     const fd = await wfA.evaluate(() => window.__fd);
     check('the Friends window dialed exactly once, for the one real click, and never showed an error', fd.filter((x) => x.what === 'onLanConnect').length === 1 && !fd.some((x) => x.what === 'setStatus' && x.e), fd);
