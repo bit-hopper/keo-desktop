@@ -1,7 +1,7 @@
 // Makes the app a person can unzip and run: the fixed host (app.js, main.js, lib/) plus the built keo package it serves, in a folder for the
-// system this runs on, and optionally a zip of that folder.
+// system this runs on (or another one named with --platform), and optionally a zip of that folder.
 //
-//   node scripts/pack.js --package <built desktop package> --out <folder> [--update-key <file>] [--bundled-version <n>] [--zip]
+//   node scripts/pack.js --package <built desktop package> --out <folder> [--update-key <file>] [--bundled-version <n>] [--platform win32|linux] [--arch x64|arm64] [--zip]
 //
 //   --package         the folder `node extension/build.js <folder> --desktop` made in the keo repo; it becomes resources/keo-package
 //   --out             where the result goes (a new or empty folder; nothing in it is overwritten silently)
@@ -9,6 +9,10 @@
 //                     taken from the package, and checks every release against it. Without a key (this or one inside the package) the
 //                     app is made without one and takes no updates; it says so
 //   --bundled-version the release number the package counts as (default 0): a release must be higher to be applied
+//   --platform        the system the app is for (default: this one). A build for another system cannot be run here: its first run is on that system. A zip
+//                     made on win32 does not keep the executable bit, so on linux run `chmod +x keo` (and, if the system's sandbox helper is not set up and
+//                     the app stops saying so, start it with --no-sandbox, which weakens the runtime's own protection)
+//   --arch            the processor (default: this one)
 //   --zip             also makes <out>/keo-<platform>-<arch>.zip
 //
 // What the result is NOT: signed (no code-signing certificate exists yet, so the system warns on first run), an installer (planned before
@@ -26,7 +30,7 @@ const flag = (n) => process.argv.indexOf(n) > 0;
 
 (async () => {
   const pkg = arg('--package') && path.resolve(arg('--package')), out = arg('--out') && path.resolve(arg('--out'));
-  if (!pkg || !out) die('usage: node scripts/pack.js --package <built desktop package> --out <folder> [--update-key <file>] [--bundled-version <n>] [--zip]');
+  if (!pkg || !out) die('usage: node scripts/pack.js --package <built desktop package> --out <folder> [--update-key <file>] [--bundled-version <n>] [--platform win32|linux] [--arch x64|arm64] [--zip]');
   // the package must be one this host can run, before anything is copied
   try { readPolicy(JSON.parse(fs.readFileSync(path.join(pkg, 'desktop.json'), 'utf8')), 'keo.test'); } catch (e) { die('That folder is not a desktop package of keo (' + (e && e.message) + '): ' + pkg); }
   if (!fs.existsSync(path.join(pkg, 'start.html'))) die('The package has no start.html: ' + pkg);
@@ -34,6 +38,9 @@ const flag = (n) => process.argv.indexOf(n) > 0;
   const bundledVersion = arg('--bundled-version') === null ? 0 : Number(arg('--bundled-version'));
   if (!Number.isSafeInteger(bundledVersion) || bundledVersion < 0) die('--bundled-version must be a whole number, 0 or more');
   if (fs.existsSync(out) && fs.readdirSync(out).length) die('Refusing to use a folder that is not empty: ' + out);
+  const platform = arg('--platform') || process.platform, arch = arg('--arch') || process.arch;
+  if (['win32', 'linux'].indexOf(platform) < 0) die('--platform must be win32 or linux (it says ' + platform + ')');
+  if (['x64', 'arm64'].indexOf(arch) < 0) die('--arch must be x64 or arm64 (it says ' + arch + ')');
   const own = JSON.parse(fs.readFileSync(path.join(DESK, 'package.json'), 'utf8'));
   const electronVersion = (own.devDependencies || {}).electron;
   if (!/^\d+\.\d+\.\d+$/.test(electronVersion || '')) die('package.json must pin electron to an exact version (it says ' + electronVersion + ')');
@@ -57,7 +64,7 @@ const flag = (n) => process.argv.indexOf(n) > 0;
 
   const { packager } = await import('@electron/packager');
   const built = await packager({
-    dir: app, out: path.join(out, 'app'), name: 'keo', executableName: 'keo', platform: process.platform, arch: process.arch,
+    dir: app, out: path.join(out, 'app'), name: 'keo', executableName: 'keo', platform: platform, arch: arch,
     electronVersion, overwrite: true, asar: true, prune: false, junk: false, quiet: true,
     extraResource: [path.join(extra, 'keo-package'), path.join(extra, 'bundled.json')]
   });
@@ -67,7 +74,7 @@ const flag = (n) => process.argv.indexOf(n) > 0;
   console.log('package: ' + (fs.existsSync(path.join(pkg, 'keo-build.json')) ? JSON.parse(fs.readFileSync(path.join(pkg, 'keo-build.json'), 'utf8')).version : '?') + ', counts as release ' + bundledVersion + ', ' + (keyFile ? 'takes updates signed by the key in ' + path.basename(keyFile) : 'takes no updates'));
 
   if (flag('--zip')) {
-    const zip = path.join(out, 'keo-' + process.platform + '-' + process.arch + '.zip');
+    const zip = path.join(out, 'keo-' + platform + '-' + arch + '.zip');
     // bsdtar reads and writes zip files (the main desktop systems ship it); GNU tar does not
     // On win32 the system's own tar.exe is named in full: a GNU tar earlier on the path (a Unix toolkit's) reads "C:" as a remote host.
     const sysTar = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:/Windows', 'System32', 'tar.exe') : 'tar';
