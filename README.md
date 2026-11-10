@@ -85,6 +85,7 @@ The update tests make their own signing key and small made-up packages (the buil
 ```
 node scripts/run-electron.js scripts/permissions.js --package <folder> --work <scratch folder>   # fake camera and microphone: who gets them, what is refused, that copying works
 node scripts/run-electron.js scripts/dialogs.js --package <folder> --work <scratch folder>       # the link dialog's Copy and Save as file by real clicks, and the "Leave keo?" question
+node scripts/run-electron.js scripts/intro.js --package <folder> --work <scratch folder>         # the introduction screens (a QR code to show, one to read) by real clicks and keys: files carried, page policy, Copy to the system clipboard
 ```
 
 ```
